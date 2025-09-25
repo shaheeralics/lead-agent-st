@@ -99,6 +99,7 @@ class URLExtractor:
         """Extract Google Maps place URLs from any webpage with progress tracking"""
         progress_placeholder = st.empty()
         status_placeholder = st.empty()
+        debug_placeholder = st.empty()
         
         try:
             # Step 1: Setup WebDriver
@@ -117,250 +118,207 @@ class URLExtractor:
             self.driver.get(input_url)
             
             # Wait for initial load and check if page loaded successfully
-            time.sleep(3)
+            time.sleep(5)  # Increased wait time
             page_title = self.driver.title
-            if not page_title or "error" in page_title.lower():
-                status_placeholder.warning("⚠️ Page may not have loaded correctly, but continuing...")
-            else:
-                status_placeholder.success(f"✅ Page loaded successfully: {page_title[:50]}...")
+            current_url = self.driver.current_url
             
-            # Step 3: Scroll to load dynamic content
+            if hasattr(self, 'debug_mode') and self.debug_mode:
+                debug_placeholder.info(f"📄 Page Title: {page_title}")
+                debug_placeholder.info(f"📍 Current URL: {current_url}")
+            
+            # Step 3: Aggressive content loading
             with progress_placeholder.container():
                 progress_bar.progress(40)
-                status_placeholder.info("📜 Scrolling to load all content...")
+                status_placeholder.info("� Loading all dynamic content...")
             
-            # Scroll multiple times to load dynamic content
-            scroll_attempts = 5
-            for i in range(scroll_attempts):
+            # More aggressive scrolling and waiting
+            for i in range(10):  # Increased scroll attempts
+                # Scroll down
                 self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                time.sleep(1.5)
+                time.sleep(1)
                 
-                # Update progress for scrolling
-                scroll_progress = 40 + (i + 1) * 10
-                with progress_placeholder.container():
-                    progress_bar.progress(min(scroll_progress, 60))
-                    status_placeholder.info(f"📜 Scrolling... ({i + 1}/{scroll_attempts})")
+                # Scroll up a bit
+                self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight * 0.7);")
+                time.sleep(1)
+                
+                # Try clicking "Load more" type buttons
+                try:
+                    load_more_buttons = self.driver.find_elements(By.XPATH, 
+                        "//button[contains(text(), 'Load') or contains(text(), 'More') or contains(text(), 'Show')]")
+                    for btn in load_more_buttons[:2]:  # Click first 2 buttons found
+                        try:
+                            btn.click()
+                            time.sleep(2)
+                        except:
+                            pass
+                except:
+                    pass
+                
+                if i % 3 == 0:
+                    status_placeholder.info(f"� Loading content... ({i+1}/10)")
             
-            # Step 4: Extract page content
+            # Step 4: Extract ALL content
             with progress_placeholder.container():
-                progress_bar.progress(70)
-                status_placeholder.info("🔍 Extracting page content...")
+                progress_bar.progress(60)
+                status_placeholder.info("� Extracting all page content...")
                 
             page_source = self.driver.page_source
             page_length = len(page_source)
             
-            if page_length < 1000:
-                status_placeholder.warning(f"⚠️ Page content seems small ({page_length} chars). May be incomplete.")
-            else:
-                status_placeholder.info(f"📄 Page content extracted ({page_length:,} characters)")
+            if hasattr(self, 'debug_mode') and self.debug_mode:
+                debug_placeholder.info(f"📏 Page source length: {page_length:,} characters")
+                
+                # Count occurrences of key terms
+                google_count = page_source.lower().count('google')
+                maps_count = page_source.lower().count('maps')
+                place_count = page_source.lower().count('place')
+                data_count = page_source.lower().count('data=')
+                
+                debug_placeholder.info(f"� Content analysis: 'google'({google_count}) 'maps'({maps_count}) 'place'({place_count}) 'data='({data_count})")
             
-            # Step 5: Find Google Maps URLs using multiple patterns
+            # Step 5: SUPER AGGRESSIVE URL EXTRACTION
             with progress_placeholder.container():
                 progress_bar.progress(80)
-                status_placeholder.info("🗺️ Searching for Google Maps URLs...")
+                status_placeholder.info("�️ Super aggressive URL search...")
             
-            google_maps_urls = set()
+            all_possible_urls = set()
             
-            # More comprehensive patterns
+            # Method 1: Regex patterns (comprehensive)
             patterns = [
-                # Standard Google Maps URLs
-                r'https://www\.google\.com/maps/place/[^"\s<>\]]+',
-                r'https://maps\.google\.com/[^"\s<>\]]*place[^"\s<>\]]*',
-                r'https://goo\.gl/maps/[^"\s<>\]]+',
+                # Standard patterns
+                r'https?://(?:www\.)?google\.com/maps/[^\s"\'<>})\]]+',
+                r'https?://maps\.google\.com/[^\s"\'<>})\]]+',
+                r'https?://goo\.gl/maps/[^\s"\'<>})\]]+',
                 
-                # URLs with data parameters (like your example)
-                r'https://www\.google\.com/maps/[^"\s<>\]]*data=[^"\s<>\]]+',
+                # Any URL containing both 'google' and 'maps'
+                r'https?://[^\s"\'<>})\]]*google[^\s"\'<>})\]]*maps[^\s"\'<>})\]]+',
+                r'https?://[^\s"\'<>})\]]*maps[^\s"\'<>})\]]*google[^\s"\'<>})\]]+',
                 
-                # URLs with coordinates
-                r'https://www\.google\.com/maps/[^"\s<>\]]*@\d+\.\d+[^"\s<>\]]*',
-                
-                # More flexible patterns
-                r'https://[^"\s<>\]]*google[^"\s<>\]*/maps[^"\s<>\]]+',
-                r'https://[^"\s<>\]]*maps\.google[^"\s<>\]]+',
+                # Encoded versions
+                r'https?%3A//[^\s"\'<>})\]]*google[^\s"\'<>})\]]*maps[^\s"\'<>})\]]+',
+                r'https?%3A//[^\s"\'<>})\]]*maps[^\s"\'<>})\]]*google[^\s"\'<>})\]]+',
             ]
             
-            all_found_urls = []
-            
             for i, pattern in enumerate(patterns):
-                found = re.findall(pattern, page_source)
-                all_found_urls.extend(found)
-                status_placeholder.info(f"🔍 Pattern {i+1}/7: Found {len(found)} URLs")
+                found_urls = re.findall(pattern, page_source, re.IGNORECASE)
+                all_possible_urls.update(found_urls)
+                
+                if hasattr(self, 'debug_mode') and self.debug_mode:
+                    debug_placeholder.info(f"🎯 Pattern {i+1}: Found {len(found_urls)} URLs")
             
-            status_placeholder.info(f"🔍 Total URLs found from patterns: {len(all_found_urls)}")
+            # Method 2: Search in ALL attributes
+            status_placeholder.info("� Searching all HTML attributes...")
             
-            # Debug: Show some sample URLs found
-            if all_found_urls:
-                status_placeholder.info(f"📝 Sample URLs found: {all_found_urls[0][:100]}...")
-            
-            # Clean and validate URLs
-            valid_count = 0
-            for url in all_found_urls:
-                # More aggressive cleaning
-                clean_url = url
-                
-                # Remove common ending characters
-                for char in ['"', "'", '<', '>', ']', ')', '}']:
-                    if char in clean_url:
-                        clean_url = clean_url.split(char)[0]
-                
-                # Remove URL parameters that might break the link (but keep data parameter)
-                if '&' in clean_url and 'data=' in clean_url:
-                    # Keep everything up to but not including parameters after data
-                    parts = clean_url.split('&')
-                    cleaned_parts = [parts[0]]  # Keep base URL
-                    for part in parts[1:]:
-                        if part.startswith(('data=', 'tbm=', 'q=')):
-                            cleaned_parts.append(part)
-                    clean_url = '&'.join(cleaned_parts)
-                
-                if self.is_valid_maps_url_flexible(clean_url):
-                    google_maps_urls.add(clean_url)
-                    valid_count += 1
-            
-            status_placeholder.info(f"✅ Valid Google Maps URLs after cleaning: {valid_count}")
-            
-            # If still no results, try a more aggressive search
-            if not google_maps_urls:
-                status_placeholder.info("🔍 No results yet, trying more aggressive search...")
-                
-                # Search for any URL containing 'maps' and 'google'
-                aggressive_pattern = r'https://[^"\s<>\]]*(?:google[^"\s<>\]]*maps|maps[^"\s<>\]]*google)[^"\s<>\]]*'
-                aggressive_urls = re.findall(aggressive_pattern, page_source)
-                
-                status_placeholder.info(f"🔍 Aggressive search found: {len(aggressive_urls)} URLs")
-                
-                for url in aggressive_urls:
-                    clean_url = url.split('"')[0].split("'")[0].split('<')[0]
-                    if 'google' in clean_url and 'maps' in clean_url:
-                        google_maps_urls.add(clean_url)
-                
-                # Also try searching in the raw HTML for common patterns
-                if not google_maps_urls:
-                    # Look for URLs in href attributes specifically
-                    href_pattern = r'href=["\']([^"\']*(?:google[^"\']*maps|maps[^"\']*google)[^"\']*)["\']'
-                    href_urls = re.findall(href_pattern, page_source)
-                    
-                    status_placeholder.info(f"🔍 Found {len(href_urls)} URLs in href attributes")
-                    
-                    for url in href_urls:
-                        if 'google' in url and 'maps' in url:
-                            google_maps_urls.add(url)
-            
-            # Debug information
-            if google_maps_urls:
-                status_placeholder.info(f"🎯 Final results: {len(google_maps_urls)} unique URLs")
-            else:
-                status_placeholder.warning("⚠️ No Google Maps URLs found. Checking page content...")
-                
-                # Debug: Check if the page has any maps-related content
-                maps_keywords = ['maps.google', 'google.com/maps', 'goo.gl/maps', '@', 'place/', 'data=']
-                found_keywords = [kw for kw in maps_keywords if kw in page_source.lower()]
-                
-                if found_keywords:
-                    status_placeholder.warning(f"🔍 Found maps-related content: {found_keywords}")
-                    status_placeholder.info("📝 The page contains maps content but URLs may be encoded or dynamically loaded")
-                else:
-                    status_placeholder.error("❌ No maps-related content found in the page source")
-            
-            # Step 6: Check href attributes of all links
-            with progress_placeholder.container():
-                progress_bar.progress(90)
-                status_placeholder.info("🔗 Checking all clickable links on the page...")
-            
+            # Get all elements and check all their attributes
             try:
-                links = self.driver.find_elements(By.TAG_NAME, "a")
-                status_placeholder.info(f"🔗 Found {len(links)} clickable links on the page...")
+                all_elements = self.driver.find_elements(By.XPATH, "//*[@*[contains(., 'google') or contains(., 'maps')]]")
                 
-                link_urls_found = 0
-                for i, link in enumerate(links):
-                    if i % 50 == 0:  # Update every 50 links
-                        status_placeholder.info(f"🔗 Checked {i}/{len(links)} links... ({link_urls_found} maps URLs found)")
-                        
+                for element in all_elements[:200]:  # Limit to first 200 elements to avoid timeout
                     try:
-                        href = link.get_attribute("href")
-                        if href:
-                            # Try both validation methods
-                            if self.is_valid_maps_url(href) or self.is_valid_maps_url_flexible(href):
-                                google_maps_urls.add(href)
-                                link_urls_found += 1
-                                
-                            # Also check onclick and other attributes that might contain URLs
-                            onclick = link.get_attribute("onclick")
-                            if onclick and 'google' in onclick and 'maps' in onclick:
-                                # Extract URL from onclick
-                                url_match = re.search(r'https://[^\'"\s]+', onclick)
-                                if url_match:
-                                    onclick_url = url_match.group()
-                                    if self.is_valid_maps_url_flexible(onclick_url):
-                                        google_maps_urls.add(onclick_url)
-                                        link_urls_found += 1
-                    except:
-                        continue  # Skip broken links
-                
-                status_placeholder.info(f"🔗 Link checking complete: {link_urls_found} maps URLs found from links")
+                        # Get all attributes
+                        attrs = self.driver.execute_script("""
+                            var items = {};
+                            for (index = 0; index < arguments[0].attributes.length; ++index) { 
+                                items[arguments[0].attributes[index].name] = arguments[0].attributes[index].value 
+                            }; 
+                            return items;
+                        """, element)
                         
-            except Exception as e:
-                status_placeholder.warning(f"⚠️ Error checking links: {e}")
-            
-            # Step 7: Final attempt - check for encoded URLs and JavaScript
-            if not google_maps_urls:
-                with progress_placeholder.container():
-                    progress_bar.progress(95)
-                    status_placeholder.info("🕵️ Final attempt - checking for encoded URLs and JavaScript...")
-                
-                # Look for URL-encoded URLs
-                import urllib.parse
-                encoded_pattern = r'https%3A//[^"\'&\s]*google[^"\'&\s]*maps[^"\'&\s]*'
-                encoded_urls = re.findall(encoded_pattern, page_source)
-                
-                for encoded_url in encoded_urls:
-                    try:
-                        decoded_url = urllib.parse.unquote(encoded_url)
-                        if self.is_valid_maps_url_flexible(decoded_url):
-                            google_maps_urls.add(decoded_url)
+                        for attr_name, attr_value in attrs.items():
+                            if attr_value and ('google' in attr_value.lower() and 'maps' in attr_value.lower()):
+                                # Try to extract URL from attribute value
+                                url_matches = re.findall(r'https?://[^\s"\'<>})\]]+', attr_value)
+                                for url in url_matches:
+                                    if 'google' in url.lower() and 'maps' in url.lower():
+                                        all_possible_urls.add(url)
                     except:
                         continue
+                        
+            except Exception as e:
+                if hasattr(self, 'debug_mode') and self.debug_mode:
+                    debug_placeholder.warning(f"Attribute search error: {e}")
+            
+            # Method 3: Search page text content for any maps-related URLs
+            status_placeholder.info("📝 Searching visible text content...")
+            
+            try:
+                page_text = self.driver.find_element(By.TAG_NAME, "body").text
+                text_urls = re.findall(r'https?://[^\s]+', page_text)
                 
-                status_placeholder.info(f"🕵️ Found {len(encoded_urls)} encoded URLs")
+                for url in text_urls:
+                    if ('google' in url.lower() and 'maps' in url.lower()) or 'goo.gl/maps' in url.lower():
+                        all_possible_urls.add(url)
+                        
+                if hasattr(self, 'debug_mode') and self.debug_mode:
+                    debug_placeholder.info(f"📝 Found {len([u for u in text_urls if 'maps' in u.lower()])} maps URLs in visible text")
+                        
+            except:
+                pass
+            
+            # Step 6: Clean and validate ALL found URLs
+            with progress_placeholder.container():
+                progress_bar.progress(90)
+                status_placeholder.info(f"🧹 Cleaning and validating {len(all_possible_urls)} potential URLs...")
+            
+            valid_urls = set()
+            
+            for url in all_possible_urls:
+                # Decode URL if encoded
+                try:
+                    import urllib.parse
+                    if '%3A' in url or '%2F' in url:
+                        url = urllib.parse.unquote(url)
+                except:
+                    pass
                 
-                # Look for URLs in JavaScript variables or data attributes
-                js_patterns = [
-                    r'"(https://[^"]*google[^"]*maps[^"]*)"',
-                    r"'(https://[^']*google[^']*maps[^']*)'",
-                    r'data-[^=]*="([^"]*google[^"]*maps[^"]*)"',
-                    r"data-[^=]*='([^']*google[^']*maps[^']*)'"
-                ]
+                # Clean URL
+                clean_url = url
                 
-                for pattern in js_patterns:
-                    js_urls = re.findall(pattern, page_source)
-                    for js_url in js_urls:
-                        if self.is_valid_maps_url_flexible(js_url):
-                            google_maps_urls.add(js_url)
+                # Remove common trailing characters
+                for char in ['"', "'", '<', '>', '}', ')', ']', ';', ',']:
+                    clean_url = clean_url.split(char)[0]
                 
-                status_placeholder.info(f"🕵️ JavaScript/data attribute search complete")
-                
-            # Final debug info
-            if not google_maps_urls:
-                with progress_placeholder.container():
-                    status_placeholder.error("🚫 Still no URLs found. Providing debug information...")
+                # Basic validation: must be a proper URL with google/maps
+                if (clean_url.startswith(('http://', 'https://')) and 
+                    len(clean_url) > 25 and
+                    'google' in clean_url.lower() and 
+                    ('maps' in clean_url.lower() or 'goo.gl' in clean_url.lower())):
                     
-                    # Show a sample of the page content for debugging
-                    sample_content = page_source[:2000]  # First 2000 characters
-                    if 'google' in sample_content.lower() or 'maps' in sample_content.lower():
-                        st.expander("🔍 Debug: Page content sample", expanded=False).code(sample_content)
-                        status_placeholder.info("📝 The page contains 'google' or 'maps' text. URLs might be dynamically loaded or in a different format.")
-                    else:
-                        status_placeholder.info("📝 The page doesn't seem to contain Google Maps content in the HTML source.")
+                    valid_urls.add(clean_url)
+            
+            if hasattr(self, 'debug_mode') and self.debug_mode:
+                debug_placeholder.info(f"✅ Valid URLs after cleaning: {len(valid_urls)}")
+                
+                # Show first few URLs found
+                if valid_urls:
+                    sample_urls = list(valid_urls)[:3]
+                    for i, url in enumerate(sample_urls):
+                        debug_placeholder.info(f"🔗 Sample URL {i+1}: {url[:100]}...")
             
             # Step 7: Complete
             with progress_placeholder.container():
                 progress_bar.progress(100)
-                if google_maps_urls:
-                    status_placeholder.success(f"✅ Extraction complete! Found {len(google_maps_urls)} Google Maps URLs")
+                if valid_urls:
+                    status_placeholder.success(f"✅ Extraction complete! Found {len(valid_urls)} Google Maps URLs")
                 else:
-                    status_placeholder.error("❌ No Google Maps URLs found on this page")
+                    status_placeholder.error("❌ No Google Maps URLs found")
+                    
+                    # Show detailed debug info if no URLs found
+                    if hasattr(self, 'debug_mode') and self.debug_mode:
+                        debug_placeholder.error("🔍 DEBUG INFO:")
+                        debug_placeholder.info(f"• Page loaded: {page_title[:50] if page_title else 'No title'}")
+                        debug_placeholder.info(f"• Content size: {page_length:,} chars")
+                        debug_placeholder.info(f"• Contains 'google': {google_count > 0}")
+                        debug_placeholder.info(f"• Contains 'maps': {maps_count > 0}")
+                        debug_placeholder.info(f"• Raw URLs found: {len(all_possible_urls)}")
+                        
+                        # Show a sample of the page content
+                        if page_length > 100:
+                            sample_content = page_source[:1000]
+                            with st.expander("📄 Page Content Sample (first 1000 chars)", expanded=False):
+                                st.code(sample_content)
             
-            return list(google_maps_urls)
+            return list(valid_urls)
             
         except Exception as e:
             with progress_placeholder.container():
