@@ -15,10 +15,15 @@ import hashlib
 import random
 import json
 from datetime import datetime
-from fake_useragent import UserAgent
 from io import BytesIO
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+
+# Optional imports with fallbacks
+try:
+    import gspread
+    from oauth2client.service_account import ServiceAccountCredentials
+    HAS_GSPREAD = True
+except ImportError:
+    HAS_GSPREAD = False
 
 # Page configuration
 st.set_page_config(
@@ -129,10 +134,21 @@ st.markdown("""
 
 class LeadScraper:
     def __init__(self):
-        self.ua = UserAgent()
+        # Predefined user agents for web scraping
+        self.user_agents = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36"
+        ]
         self.driver = None
         self.leads = []
         self.processed_urls = set()
+    
+    def get_user_agent(self):
+        """Get a random user agent"""
+        return random.choice(self.user_agents)
         
     def setup_driver(self):
         """Setup Chrome WebDriver with options"""
@@ -140,7 +156,7 @@ class LeadScraper:
         chrome_options.add_argument("--headless")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument(f"--user-agent={self.ua.random}")
+        chrome_options.add_argument(f"--user-agent={self.get_user_agent()}")
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
         chrome_options.add_experimental_option('useAutomationExtension', False)
@@ -267,7 +283,7 @@ class LeadScraper:
     def extract_email_from_website(self, website_url):
         """Extract email from business website"""
         try:
-            headers = {'User-Agent': self.ua.random}
+            headers = {'User-Agent': self.get_user_agent()}
             response = requests.get(website_url, headers=headers, timeout=10)
             
             if response.status_code == 200:
@@ -352,6 +368,11 @@ def create_excel_download(leads_df):
 
 def save_to_google_sheets(leads_df, sheet_name="Lead Generation"):
     """Save leads to Google Sheets (requires credentials)"""
+    if not HAS_GSPREAD:
+        st.error("❌ Google Sheets integration not available. Install 'gspread' and 'oauth2client' packages.")
+        st.code("pip install gspread oauth2client")
+        return False
+        
     try:
         # This would require Google Sheets API credentials
         # For demo purposes, showing the structure

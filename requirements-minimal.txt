@@ -1,0 +1,8 @@
+# Essential packages only - no optional dependencies
+streamlit
+requests
+beautifulsoup4
+selenium
+pandas
+openpyxl
+webdriver-manager

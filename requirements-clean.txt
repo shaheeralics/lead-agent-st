@@ -1,0 +1,8 @@
+# Clean requirements - no optional packages that cause conflicts
+streamlit
+requests
+beautifulsoup4
+selenium
+pandas
+openpyxl
+webdriver-manager
