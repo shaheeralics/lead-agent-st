@@ -187,38 +187,69 @@ class URLExtractor:
             
             found_urls = set()
             
-            # Comprehensive URL patterns
+            # Comprehensive URL patterns to find Google Maps URLs
             patterns = [
-                r'https://www\.google\.com/maps/place/[^\s"\'<>]+',
-                r'https://www\.google\.com/maps/[^\s"\'<>]*@[\d\.,\-]+[^\s"\'<>]*',
-                r'https://maps\.google\.com/[^\s"\'<>]+',
-                r'https://goo\.gl/maps/[^\s"\'<>]+',
-                r'https://www\.google\.com/maps/search/[^\s"\'<>]+',
-                r'https://www\.google\.com/maps/dir/[^\s"\'<>]+',
-                r'https://maps\.app\.goo\.gl/[^\s"\'<>]+',
+                # Standard Google Maps URLs
+                r'https://www\.google\.com/maps/place/[^\s"\'<>\)]+',
+                r'https://www\.google\.com/maps/[^\s"\'<>\)]*@[\d\.,\-]+[^\s"\'<>\)]*',
+                r'https://maps\.google\.com/[^\s"\'<>\)]+',
+                r'https://goo\.gl/maps/[^\s"\'<>\)]+',
+                
+                # Additional formats
+                r'https://www\.google\.com/maps/search/[^\s"\'<>\)]+',
+                r'https://www\.google\.com/maps/dir/[^\s"\'<>\)]+',
+                r'https://maps\.app\.goo\.gl/[^\s"\'<>\)]+',
+                
+                # Encoded versions (common in HTML)
+                r'https%3A//www\.google\.com/maps[^\s"\'<>\)]+',
+                r'https%3A//maps\.google\.com[^\s"\'<>\)]+',
+                
+                # Alternative patterns with different delimiters
+                r'https://[^/]*google[^/]*/maps/[^\s"\'<>\)]+',
+                r'https://[^/]*maps\.google[^/]*/[^\s"\'<>\)]+',
             ]
             
+            pattern_results = {}
             total_found = 0
-            for pattern in patterns:
+            
+            for i, pattern in enumerate(patterns):
                 matches = re.findall(pattern, page_source, re.IGNORECASE)
                 found_urls.update(matches)
-                total_found += len(matches)
+                pattern_count = len(matches)
+                total_found += pattern_count
+                pattern_results[f"Pattern {i+1}"] = pattern_count
+            
+            # Also search for URLs in href attributes specifically
+            href_pattern = r'href=["\']([^"\']*(?:google\.com/maps|maps\.google\.com|goo\.gl/maps)[^"\']*)["\']'
+            href_matches = re.findall(href_pattern, page_source, re.IGNORECASE)
+            found_urls.update(href_matches)
+            href_count = len(href_matches)
+            total_found += href_count
             
             if self.debug_mode:
                 with debug_container:
-                    st.info(f"🎯 Pattern search: {total_found} raw URLs")
+                    st.info(f"🎯 Total raw URLs found: {total_found}")
+                    st.info(f"   • From href attributes: {href_count}")
+                    for pattern_name, count in pattern_results.items():
+                        if count > 0:
+                            st.info(f"   • {pattern_name}: {count} URLs")
             
             # Clean and validate URLs
             progress_bar.progress(90)
-            status_text.info("🧹 Cleaning URLs...")
+            status_text.info("🧹 Cleaning and validating URLs...")
             
             clean_urls = []
+            invalid_urls = []
+            
             for url in found_urls:
-                clean_url = self.clean_url(url)
+                # Decode URL if encoded
+                clean_url = self.clean_and_decode_url(url)
                 if clean_url and self.is_maps_url(clean_url):
                     clean_urls.append(clean_url)
+                elif clean_url:
+                    invalid_urls.append(clean_url[:100])  # Keep for debugging
             
-            # Remove duplicates
+            # Remove duplicates while preserving order
             clean_urls = list(dict.fromkeys(clean_urls))
             
             # Results
@@ -228,49 +259,84 @@ class URLExtractor:
                 status_text.success(f"✅ Found {len(clean_urls)} Google Maps URLs!")
                 if self.debug_mode:
                     with debug_container:
-                        st.success(f"Sample: {clean_urls[0][:80]}...")
+                        st.success(f"Sample URL: {clean_urls[0][:80]}...")
             else:
-                status_text.error("❌ No Google Maps URLs found")
+                status_text.error("❌ No Google Maps URLs found on this page")
                 
                 # Show comprehensive debug info
                 with debug_container:
-                    st.error("🔍 **Debug Analysis:**")
+                    st.error("🔍 **Detailed Analysis:**")
                     
                     # Content analysis
                     google_count = page_source.lower().count('google')
                     maps_count = page_source.lower().count('maps')
                     http_count = page_source.lower().count('http')
+                    href_count_total = page_source.lower().count('href=')
                     
-                    st.write(f"• Content size: {len(page_source):,} characters")
-                    st.write(f"• Keywords: google({google_count}) maps({maps_count}) http({http_count})")
+                    st.write(f"• Page size: {len(page_source):,} characters")
+                    st.write(f"• Keywords found: google({google_count}) maps({maps_count}) http({http_count})")
+                    st.write(f"• Links in page: {href_count_total} href attributes")
                     st.write(f"• Raw URLs found: {len(found_urls)}")
+                    st.write(f"• Invalid URLs rejected: {len(invalid_urls)}")
                     
-                    # Show sample content
+                    # Show rejected URLs for debugging
+                    if invalid_urls:
+                        with st.expander(f"🔍 Rejected URLs ({len(invalid_urls)})", expanded=False):
+                            for i, url in enumerate(invalid_urls[:5]):
+                                st.code(f"{i+1}. {url}")
+                            if len(invalid_urls) > 5:
+                                st.write(f"... and {len(invalid_urls)-5} more")
+                    
+                    # Show sample content with better formatting
                     if page_source:
-                        # Check if content looks readable
-                        sample = page_source[:1000]
+                        sample = page_source[:2000]
                         readable_chars = sum(1 for c in sample if c.isprintable() and ord(c) < 127)
                         readability = readable_chars / len(sample) if sample else 0
                         
                         st.write(f"• Content readability: {readability:.1%}")
                         
-                        if readability > 0.7:
-                            with st.expander("📄 Page content sample", expanded=True):
+                        if readability > 0.6:
+                            # Look for business-related content
+                            business_terms = ['restaurant', 'business', 'address', 'phone', 'location', 'directory']
+                            business_found = [term for term in business_terms if term in sample.lower()]
+                            
+                            if business_found:
+                                st.info(f"✅ Found business terms: {', '.join(business_found)}")
+                            else:
+                                st.warning("⚠️ No business-related terms found")
+                            
+                            with st.expander("📄 Page content sample", expanded=False):
                                 st.code(sample)
                         else:
-                            st.warning("⚠️ Content appears corrupted or compressed")
-                            st.info("Try a different URL or website")
+                            st.warning("⚠️ Content appears corrupted, compressed, or non-HTML")
                     
-                    # Show all URLs found (not just maps ones)
-                    all_urls = re.findall(r'https?://[^\s"\'<>]+', page_source[:3000])
+                    # Show ALL URLs found in page
+                    all_urls = re.findall(r'https?://[^\s"\'<>\)]+', page_source[:5000])
                     if all_urls:
-                        with st.expander(f"🔗 All URLs found ({len(all_urls)})", expanded=False):
+                        google_urls = [url for url in all_urls if 'google' in url.lower()]
+                        maps_urls = [url for url in all_urls if 'maps' in url.lower()]
+                        
+                        st.write(f"• All URLs in page: {len(all_urls)}")
+                        st.write(f"• URLs containing 'google': {len(google_urls)}")
+                        st.write(f"• URLs containing 'maps': {len(maps_urls)}")
+                        
+                        with st.expander(f"🔗 All URLs found ({len(all_urls[:10])} shown)", expanded=False):
                             for i, url in enumerate(all_urls[:10]):
                                 st.code(f"{i+1}. {url}")
                             if len(all_urls) > 10:
-                                st.write(f"... and {len(all_urls)-10} more")
+                                st.write(f"... and {len(all_urls)-10} more URLs")
+                                
+                        if google_urls:
+                            with st.expander(f"🎯 Google URLs ({len(google_urls)})", expanded=True):
+                                for i, url in enumerate(google_urls):
+                                    st.code(f"{i+1}. {url}")
+                    
                     else:
-                        st.warning("No URLs found in content at all")
+                        st.error("❌ No URLs found at all in the page")
+                        st.info("**Suggestions:**")
+                        st.info("• Try a different business directory website")
+                        st.info("• Check if the URL is accessible in a browser")
+                        st.info("• Some sites may block automated requests")
             
             return clean_urls
             
@@ -278,6 +344,30 @@ class URLExtractor:
             with error_container:
                 st.error(f"❌ URL extraction failed: {str(e)}")
             return []
+    
+    def clean_and_decode_url(self, url):
+        """Clean and decode URL properly"""
+        if not url:
+            return None
+        
+        # Decode URL if encoded
+        try:
+            if '%3a' in url.lower() or '%2f' in url.lower():
+                url = urllib.parse.unquote(url)
+        except:
+            pass
+        
+        # Remove unwanted characters
+        for char in ['"', "'", '<', '>', '}', ')', ']', ';', ',', '\\']:
+            url = url.split(char)[0]
+        
+        url = url.strip()
+        
+        # Must start with http/https
+        if not url.startswith(('http://', 'https://')):
+            return None
+        
+        return url
     
     def is_maps_url(self, url):
         """Check if URL is a Google Maps URL"""
@@ -305,21 +395,6 @@ class URLExtractor:
         has_location = any(pattern in url_lower for pattern in ['@', 'place/', 'search/', 'dir/', '/maps/'])
         
         return has_indicator and (has_location or len(url) > 50)
-    
-    def clean_url(self, url):
-        """Clean URL by removing unwanted characters"""
-        if not url:
-            return None
-            
-        # Remove trailing junk
-        for char in ['"', "'", '<', '>', '}', ')', ']', ';', ',']:
-            url = url.split(char)[0]
-        
-        url = url.strip()
-        if not url.startswith(('http://', 'https://')):
-            return None
-            
-        return url
 
 # Main Streamlit App
 def main():
@@ -343,33 +418,28 @@ def main():
         
         debug_mode = st.checkbox("🔧 Debug Mode", value=True)
         
-        # Test button
-        if st.button("🧪 Test with Sample"):
-            st.info("Testing extraction logic with sample content...")
+        # Test with known working URL
+        if st.button("🧪 Test with Sample URL"):
+            st.info("Testing with a known business directory page...")
             
-            test_html = """
-            <html><body>
-            <h1>Business Directory</h1>
-            <a href="https://www.google.com/maps/place/Pizza+Palace/@40.7128,-74.0060,17z">Pizza Palace</a>
-            <a href="https://maps.google.com/maps?q=coffee+shop">Coffee Shop</a>
-            <a href="https://goo.gl/maps/test123">Auto Repair</a>
-            </body></html>
-            """
+            # Use a real webpage that should contain Google Maps URLs
+            test_url = "https://www.yellowpages.com/search?search_terms=restaurants&geo_location_terms=New%20York%2C%20NY"
             
             extractor = URLExtractor()
             extractor.debug_mode = debug_mode
             
-            progress_bar = st.progress(50)
-            urls = extractor.extract_urls_from_content(
-                test_html, progress_bar, st.empty(), st.container(), st.container()
-            )
+            st.markdown("---")
+            st.subheader("🧪 Test Results")
+            
+            urls = extractor.extract_google_maps_urls(test_url)
             
             if urls:
-                st.success(f"✅ Test passed! Found {len(urls)} URLs")
-                for url in urls:
-                    st.code(url)
+                st.success(f"✅ Test passed! Found {len(urls)} URLs from real webpage")
+                df = pd.DataFrame({'Google Maps URL': urls})
+                st.dataframe(df, use_container_width=True)
             else:
-                st.error("❌ Test failed")
+                st.warning("⚠️ Test didn't find URLs - this is normal for some websites")
+                st.info("Try entering your own URL in the input field above")
         
         # Extract button
         if st.button("🚀 Extract URLs", disabled=not url_input):
