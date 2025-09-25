@@ -370,24 +370,66 @@ class URLExtractor:
             else:
                 status_text.error("❌ No Google Maps URLs found on this page")
                 
-                # Show debug information
+                # Show comprehensive debug information
                 with error_container:
                     st.warning("**Possible reasons:**")
                     st.info("• The page might not contain Google Maps business URLs")
                     st.info("• URLs might be loaded dynamically with JavaScript")
                     st.info("• Try a different page with business listings")
                 
-                if self.debug_mode:
-                    with debug_container:
-                        st.error("🔍 Debug Information:")
-                        st.write(f"• Content size: {len(page_source):,} characters") 
-                        st.write(f"• Contains 'google': {'google' in page_source.lower()}")
-                        st.write(f"• Contains 'maps': {'maps' in page_source.lower()}")
-                        st.write(f"• Raw URLs found: {len(found_urls)}")
-                        
-                        if page_source and len(page_source) > 100:
-                            with st.expander("📄 Sample page content (first 1000 chars)"):
-                                st.code(page_source[:1000])
+                # Always show basic debug info when no URLs found
+                with debug_container:
+                    st.error("🔍 **Debug Information:**")
+                    st.write(f"• Content size: {len(page_source):,} characters") 
+                    st.write(f"• Contains 'google': {'google' in page_source.lower()}")
+                    st.write(f"• Contains 'maps': {'maps' in page_source.lower()}")
+                    st.write(f"• Raw URLs found: {len(found_urls)}")
+                    
+                    # Show some sample URLs if any were found but didn't pass validation
+                    if found_urls:
+                        st.write("**Raw URLs found (before cleaning):**")
+                        sample_raw = list(found_urls)[:3]
+                        for i, url in enumerate(sample_raw):
+                            st.code(f"{i+1}. {url}")
+                    
+                    # Always show content sample for debugging
+                    st.write("**Sample content analysis:**")
+                    
+                    # Look for common maps-related terms
+                    maps_terms = ['maps', 'google', 'place', 'business', 'location', 'address']
+                    term_counts = {term: page_source.lower().count(term) for term in maps_terms}
+                    
+                    st.write("Terms found:")
+                    for term, count in term_counts.items():
+                        if count > 0:
+                            st.write(f"  • '{term}': {count}")
+                    
+                    # Show first 1500 characters of content
+                    if page_source and len(page_source) > 100:
+                        with st.expander("📄 Page content sample (first 1500 chars)", expanded=True):
+                            st.code(page_source[:1500])
+                            
+                        # Also look for any URL patterns in the content
+                        with st.expander("🔍 All URLs found in content", expanded=False):
+                            all_urls = re.findall(r'https?://[^\s"\'<>]+', page_source[:5000])  # First 5000 chars
+                            if all_urls:
+                                st.write(f"Found {len(all_urls)} total URLs:")
+                                for i, url in enumerate(all_urls[:10]):  # Show first 10
+                                    st.code(f"{i+1}. {url}")
+                                if len(all_urls) > 10:
+                                    st.write(f"... and {len(all_urls) - 10} more URLs")
+                            else:
+                                st.write("No URLs found in page content")
+                    
+                    # Suggest better test URLs
+                    st.info("**💡 Try testing with these types of URLs:**")
+                    st.code("""
+Examples of pages that typically work:
+• Business directory pages (YellowPages, etc.)
+• Local business listing sites
+• Pages with embedded Google Maps
+• Restaurant/service provider listings
+                    """)
             
             return clean_urls
             
@@ -474,7 +516,65 @@ def main():
         )
         
         # Debug mode toggle
-        debug_mode = st.checkbox("🔧 Debug Mode (show detailed extraction info)", value=False)
+        debug_mode = st.checkbox("🔧 Debug Mode (show detailed extraction info)", value=True)  # Enable by default for now
+        
+        # Test with sample data button
+        if st.button("🧪 Test with Sample Data"):
+            st.info("Testing with mock business directory content...")
+            
+            # Create a mock extractor for testing
+            test_extractor = URLExtractor()
+            test_extractor.debug_mode = debug_mode
+            
+            # Mock HTML content with Google Maps URLs
+            test_content = """
+            <html>
+            <head><title>Local Business Directory</title></head>
+            <body>
+            <h1>Local Businesses</h1>
+            <div class="business">
+                <h2>Pizza Palace Downtown</h2>
+                <p>Best pizza in the city!</p>
+                <a href="https://www.google.com/maps/place/Pizza+Palace/@40.7128,-74.0060,17z/data=!3m1!4b1">View on Maps</a>
+            </div>
+            <div class="business">
+                <h2>Coffee Corner Cafe</h2>
+                <p>Great coffee and atmosphere</p>
+                <a href="https://maps.google.com/maps?q=coffee+shop&ll=40.7580,-73.9855&z=15">Google Maps</a>
+            </div>
+            <div class="business">
+                <h2>Downtown Auto Repair</h2>
+                <p>Reliable car service since 1985</p>
+                <a href="https://goo.gl/maps/abc123xyz">Maps Link</a>
+            </div>
+            </body>
+            </html>
+            """
+            
+            st.markdown("---")
+            st.subheader("🧪 Test Results")
+            
+            # Test the extraction
+            progress_bar = st.progress(0)
+            
+            progress_bar.progress(50)
+            st.info("📄 Analyzing test content...")
+            
+            test_urls = test_extractor.extract_urls_from_content(
+                test_content, progress_bar, st.empty(), st.container(), st.container()
+            )
+            
+            if test_urls:
+                st.success(f"✅ Test successful! Found {len(test_urls)} Google Maps URLs")
+                df = pd.DataFrame({
+                    'Google Maps URL': test_urls,
+                    'Status': ['Valid'] * len(test_urls)
+                })
+                st.dataframe(df, use_container_width=True)
+                
+                st.info("🎉 **The extraction logic is working correctly!** Now try with a real URL that contains business listings.")
+            else:
+                st.error("❌ Test failed - no URLs found in sample content")
         
         # Extract button
         extract_clicked = st.button("🚀 Extract URLs", disabled=not url_input)
