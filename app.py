@@ -2,6 +2,7 @@ import streamlit as st
 import re
 import time
 import requests
+from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -58,24 +59,68 @@ class URLExtractor:
         self.debug_mode = False
         
     def setup_driver(self):
-        """Setup Chrome WebDriver with optimized options"""
+        """Setup Chrome WebDriver with cloud-compatible options"""
         try:
             chrome_options = Options()
-            chrome_options.add_argument("--headless")
+            
+            # Essential options for cloud environments
+            chrome_options.add_argument("--headless=new")  # New headless mode
             chrome_options.add_argument("--no-sandbox")
             chrome_options.add_argument("--disable-dev-shm-usage")
             chrome_options.add_argument("--disable-gpu")
+            chrome_options.add_argument("--disable-web-security")
+            chrome_options.add_argument("--disable-features=VizDisplayCompositor")
+            chrome_options.add_argument("--disable-extensions")
+            chrome_options.add_argument("--disable-plugins")
+            chrome_options.add_argument("--disable-images")
+            chrome_options.add_argument("--disable-javascript")  # We don't need JS for basic scraping
             chrome_options.add_argument("--window-size=1920,1080")
-            chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            chrome_options.add_argument("--single-process")
+            chrome_options.add_argument("--disable-background-timer-throttling")
+            chrome_options.add_argument("--disable-backgrounding-occluded-windows")
+            chrome_options.add_argument("--disable-renderer-backgrounding")
             
-            service = Service(ChromeDriverManager().install())
-            self.driver = webdriver.Chrome(service=service, options=chrome_options)
+            # User agent
+            chrome_options.add_argument("--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")
+            
+            # Try to install and setup ChromeDriver
+            try:
+                service = Service(ChromeDriverManager().install())
+                self.driver = webdriver.Chrome(service=service, options=chrome_options)
+            except Exception as service_error:
+                st.warning(f"ChromeDriverManager failed: {service_error}")
+                
+                # Fallback: try without explicit service
+                st.info("Trying fallback Chrome setup...")
+                self.driver = webdriver.Chrome(options=chrome_options)
+            
+            # Set timeouts
             self.driver.set_page_load_timeout(30)
+            self.driver.implicitly_wait(10)
+            
+            # Test the driver with a simple page
+            st.info("Testing browser setup...")
+            self.driver.get("https://httpbin.org/status/200")
             
             return True
             
         except Exception as e:
-            st.error(f"❌ Failed to setup Chrome driver: {str(e)}")
+            error_msg = str(e)
+            st.error(f"❌ Chrome driver setup failed: {error_msg}")
+            
+            # Show more helpful error information
+            if "Status code was: 127" in error_msg:
+                st.error("🔧 **Chrome binary not found!**")
+                st.info("""
+                **This error usually means:**
+                • Chrome browser is not installed
+                • Running in a restricted environment
+                
+                **Possible solutions:**
+                • Try using a different deployment platform
+                • Use a platform that supports Chrome (like Heroku, Railway, or local deployment)
+                """)
+            
             return False
     
     def close_driver(self):
@@ -102,16 +147,21 @@ class URLExtractor:
             with status_container:
                 status_text = st.empty()
             
-            # Step 1: Setup browser
+            # Step 1: Try Selenium first, then fallback to requests
             progress_bar.progress(10)
-            status_text.info("🚀 Setting up browser...")
+            status_text.info("🚀 Attempting to setup browser...")
             
+            selenium_failed = False
             if not self.setup_driver():
-                with error_container:
-                    st.error("❌ Failed to setup browser")
-                return []
+                selenium_failed = True
+                with status_container:
+                    st.warning("⚠️ Browser setup failed. Using HTTP method instead...")
+                    st.info("💡 This is normal on cloud platforms - continuing with alternative method...")
+                
+                # Fallback to requests + BeautifulSoup (more reliable on cloud)
+                return self.extract_urls_with_requests(input_url, progress_bar, status_text, error_container, debug_container)
             
-            # Step 2: Load page
+            # Step 2: Load page with Selenium
             progress_bar.progress(20)
             status_text.info(f"🌐 Loading page: {input_url}")
             
@@ -161,57 +211,133 @@ class URLExtractor:
                     with debug_container:
                         st.warning(f"⚠️ Scroll issue: {str(e)}")
             
+            # Continue with URL extraction...
+            return self.extract_urls_from_content(page_source, progress_bar, status_text, error_container, debug_container)
+            
+        except Exception as main_error:
+            # Handle any unexpected errors
+            with error_container:
+                st.error(f"❌ EXTRACTION FAILED: {str(main_error)}")
+                
+                # Show detailed error information
+                error_details = traceback.format_exc()
+                with st.expander("🔧 Technical Error Details", expanded=False):
+                    st.code(error_details)
+            
+            return []
+            
+        finally:
+            # Always cleanup browser
+            progress_bar.progress(100)
+            self.close_driver()
+    
+    def extract_urls_with_requests(self, input_url, progress_bar, status_text, error_container, debug_container):
+        """Fallback method using requests instead of Selenium - works better on cloud platforms"""
+        try:
+            progress_bar.progress(30)
+            status_text.info("🌐 Fetching page content via HTTP...")
+            
+            # Use requests to get page content with proper headers
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive',
+            }
+            
+            # Make request with proper error handling
+            try:
+                response = requests.get(input_url, headers=headers, timeout=30)
+                response.raise_for_status()
+            except requests.exceptions.Timeout:
+                with error_container:
+                    st.error("❌ Request timeout - website took too long to respond")
+                return []
+            except requests.exceptions.ConnectionError:
+                with error_container:
+                    st.error("❌ Connection failed - check if the URL is accessible")
+                return []
+            except requests.exceptions.HTTPError as e:
+                with error_container:
+                    st.error(f"❌ HTTP Error {response.status_code}: {str(e)}")
+                return []
+            
+            page_source = response.text
+            page_length = len(page_source)
+            
+            progress_bar.progress(50)
+            status_text.info(f"✅ Page fetched successfully: {page_length:,} characters")
+            
+            if self.debug_mode:
+                with debug_container:
+                    st.success("� Using HTTP method (browser-free)")
+                    st.info(f"📄 Response size: {page_length:,} characters")
+                    st.info(f"📊 Status code: {response.status_code}")
+                    google_count = page_source.lower().count('google')
+                    maps_count = page_source.lower().count('maps')
+                    st.info(f"🔍 Keywords found: 'google'({google_count}) 'maps'({maps_count})")
+            
+            # Extract URLs from content using the same method
+            return self.extract_urls_from_content(page_source, progress_bar, status_text, error_container, debug_container)
+            
+        except Exception as e:
+            with error_container:
+                st.error(f"❌ HTTP extraction failed: {str(e)}")
+                st.info("💡 **Suggestions:**")
+                st.info("• The website might be blocking automated requests")
+                st.info("• Try a different URL with public business listings")
+                st.info("• Some websites require JavaScript (try a simpler directory site)")
+            return []
+    
+    def extract_urls_from_content(self, page_source, progress_bar, status_text, error_container, debug_container):
+        """Extract URLs from page content"""
+        try:
             # Step 5: Extract URLs using multiple methods
             progress_bar.progress(80)
             status_text.info("🔍 Extracting Google Maps URLs...")
             
             found_urls = set()
             
-            # Method 1: Regex patterns on page source
+            # Method 1: Comprehensive regex patterns on page source
             try:
                 patterns = [
+                    # Standard Google Maps URLs
                     r'https://www\.google\.com/maps/place/[^\s"\'<>]+',
                     r'https://www\.google\.com/maps/[^\s"\'<>]*@[\d\.,\-]+[^\s"\'<>]*',
                     r'https://maps\.google\.com/[^\s"\'<>]+',
                     r'https://goo\.gl/maps/[^\s"\'<>]+',
+                    
+                    # Additional patterns for various formats
+                    r'https://www\.google\.com/maps/search/[^\s"\'<>]+',
+                    r'https://www\.google\.com/maps/dir/[^\s"\'<>]+',
+                    r'https://www\.google\.com/maps/@[^\s"\'<>]+',
+                    r'https://maps\.app\.goo\.gl/[^\s"\'<>]+',
+                    
+                    # Encoded versions (sometimes found in HTML)
+                    r'https%3A//www\.google\.com/maps[^\s"\'<>]+',
+                    r'https%3A//maps\.google\.com[^\s"\'<>]+',
                 ]
                 
                 total_found = 0
-                for pattern in patterns:
+                pattern_results = {}
+                
+                for i, pattern in enumerate(patterns):
                     matches = re.findall(pattern, page_source, re.IGNORECASE)
                     found_urls.update(matches)
                     total_found += len(matches)
+                    pattern_results[f"Pattern {i+1}"] = len(matches)
                 
                 if self.debug_mode:
                     with debug_container:
-                        st.info(f"🎯 Regex patterns found: {total_found} URLs")
+                        st.info(f"🎯 Total URLs from regex: {total_found}")
+                        for pattern_name, count in pattern_results.items():
+                            if count > 0:
+                                st.info(f"   • {pattern_name}: {count} URLs")
                         
             except Exception as e:
                 with error_container:
                     st.error(f"❌ Regex search failed: {str(e)}")
-            
-            # Method 2: Check all links on page
-            try:
-                links = self.driver.find_elements(By.TAG_NAME, "a")
-                link_found = 0
-                
-                for link in links[:50]:  # Check first 50 links only to avoid timeout
-                    try:
-                        href = link.get_attribute("href")
-                        if href and self.is_maps_url(href):
-                            found_urls.add(href)
-                            link_found += 1
-                    except:
-                        continue
-                
-                if self.debug_mode:
-                    with debug_container:
-                        st.info(f"🔗 Link analysis: {link_found} URLs from {len(links)} links")
-                        
-            except Exception as e:
-                if self.debug_mode:
-                    with debug_container:
-                        st.warning(f"⚠️ Link check failed: {str(e)}")
             
             # Step 6: Clean and validate URLs
             progress_bar.progress(90)
@@ -254,8 +380,7 @@ class URLExtractor:
                 if self.debug_mode:
                     with debug_container:
                         st.error("🔍 Debug Information:")
-                        st.write(f"• Page title: {page_title}")
-                        st.write(f"• Content size: {page_length:,} characters") 
+                        st.write(f"• Content size: {len(page_source):,} characters") 
                         st.write(f"• Contains 'google': {'google' in page_source.lower()}")
                         st.write(f"• Contains 'maps': {'maps' in page_source.lower()}")
                         st.write(f"• Raw URLs found: {len(found_urls)}")
@@ -266,36 +391,47 @@ class URLExtractor:
             
             return clean_urls
             
-        except Exception as main_error:
-            # Handle any unexpected errors
+        except Exception as e:
             with error_container:
-                st.error(f"❌ EXTRACTION FAILED: {str(main_error)}")
-                
-                # Show detailed error information
-                error_details = traceback.format_exc()
-                with st.expander("🔧 Technical Error Details", expanded=False):
-                    st.code(error_details)
-            
+                st.error(f"❌ URL extraction failed: {str(e)}")
             return []
-            
-        finally:
-            # Always cleanup browser
-            progress_bar.progress(100)
-            self.close_driver()
     
     def is_maps_url(self, url):
-        """Check if URL is a Google Maps URL"""
+        """Enhanced check if URL is a Google Maps URL"""
         if not url or len(url) < 20:
             return False
             
         url_lower = url.lower()
+        
+        # Decode URL if it's encoded
+        try:
+            import urllib.parse
+            if '%3a' in url_lower or '%2f' in url_lower:
+                url_lower = urllib.parse.unquote(url_lower)
+        except:
+            pass
+        
+        # Check for various Google Maps patterns
         maps_indicators = [
             'google.com/maps',
             'maps.google.com', 
-            'goo.gl/maps'
+            'goo.gl/maps',
+            'maps.app.goo.gl',
         ]
         
-        return any(indicator in url_lower for indicator in maps_indicators)
+        # Must contain at least one maps indicator
+        has_maps_indicator = any(indicator in url_lower for indicator in maps_indicators)
+        
+        # Additional validation: should contain coordinates or place info
+        has_location_data = any(pattern in url_lower for pattern in [
+            '@',          # Coordinates marker
+            'place/',     # Place URL
+            'search/',    # Search URL  
+            'dir/',       # Directions URL
+            '/maps/',     # General maps path
+        ])
+        
+        return has_maps_indicator and (has_location_data or len(url) > 50)
     
     def clean_url(self, url):
         """Clean URL by removing unwanted trailing characters"""
