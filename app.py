@@ -96,32 +96,76 @@ class URLExtractor:
             self.driver.quit()
             
     def extract_google_maps_urls(self, input_url):
-        """Extract Google Maps place URLs from any webpage"""
+        """Extract Google Maps place URLs from any webpage with progress tracking"""
+        progress_placeholder = st.empty()
+        status_placeholder = st.empty()
+        
         try:
+            # Step 1: Setup WebDriver
+            with progress_placeholder.container():
+                progress_bar = st.progress(0)
+                status_placeholder.info("🚀 Setting up Chrome browser...")
+                
             if not self.driver:
                 self.setup_driver()
-                
-            st.info("🔍 Loading webpage...")
+            
+            # Step 2: Load webpage
+            with progress_placeholder.container():
+                progress_bar.progress(20)
+                status_placeholder.info(f"🌐 Loading webpage: {input_url}")
+            
             self.driver.get(input_url)
-            time.sleep(3)  # Wait for page to load
             
-            # Scroll to load more content
-            st.info("📜 Scrolling to load more content...")
-            for i in range(3):  # Scroll 3 times
+            # Wait for initial load and check if page loaded successfully
+            time.sleep(3)
+            page_title = self.driver.title
+            if not page_title or "error" in page_title.lower():
+                status_placeholder.warning("⚠️ Page may not have loaded correctly, but continuing...")
+            else:
+                status_placeholder.success(f"✅ Page loaded successfully: {page_title[:50]}...")
+            
+            # Step 3: Scroll to load dynamic content
+            with progress_placeholder.container():
+                progress_bar.progress(40)
+                status_placeholder.info("📜 Scrolling to load all content...")
+            
+            # Scroll multiple times to load dynamic content
+            scroll_attempts = 5
+            for i in range(scroll_attempts):
                 self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                time.sleep(2)
+                time.sleep(1.5)
                 
-            # Get page source
-            page_source = self.driver.page_source
+                # Update progress for scrolling
+                scroll_progress = 40 + (i + 1) * 10
+                with progress_placeholder.container():
+                    progress_bar.progress(min(scroll_progress, 60))
+                    status_placeholder.info(f"📜 Scrolling... ({i + 1}/{scroll_attempts})")
             
-            # Find all Google Maps place URLs
+            # Step 4: Extract page content
+            with progress_placeholder.container():
+                progress_bar.progress(70)
+                status_placeholder.info("🔍 Extracting page content...")
+                
+            page_source = self.driver.page_source
+            page_length = len(page_source)
+            
+            if page_length < 1000:
+                status_placeholder.warning(f"⚠️ Page content seems small ({page_length} chars). May be incomplete.")
+            else:
+                status_placeholder.info(f"📄 Page content extracted ({page_length:,} characters)")
+            
+            # Step 5: Find Google Maps URLs using multiple patterns
+            with progress_placeholder.container():
+                progress_bar.progress(80)
+                status_placeholder.info("🗺️ Searching for Google Maps URLs...")
+            
             google_maps_urls = set()
             
             # Pattern 1: Direct Google Maps place URLs
             pattern1 = r'https://www\.google\.com/maps/place/[^"\s<>]+'
             urls1 = re.findall(pattern1, page_source)
             
-            # Pattern 2: Google Maps URLs with various formats
+            # Pattern 2: Google Maps URLs with various formats  
             pattern2 = r'https://maps\.google\.com/[^"\s<>]*place[^"\s<>]*'
             urls2 = re.findall(pattern2, page_source)
             
@@ -129,50 +173,84 @@ class URLExtractor:
             pattern3 = r'https://goo\.gl/maps/[^"\s<>]+'
             urls3 = re.findall(pattern3, page_source)
             
+            # Pattern 4: Maps URLs with data parameters (like your example)
+            pattern4 = r'https://www\.google\.com/maps/[^"\s<>]*data=[^"\s<>]*'
+            urls4 = re.findall(pattern4, page_source)
+            
             # Combine all URLs
-            all_urls = urls1 + urls2 + urls3
+            all_urls = urls1 + urls2 + urls3 + urls4
+            
+            status_placeholder.info(f"🔍 Found {len(all_urls)} potential URLs from page source")
             
             # Clean and deduplicate URLs
             for url in all_urls:
                 # Remove any trailing characters that might be HTML artifacts
-                url = re.sub(r'[&"\'<>].*$', '', url)
-                if self.is_valid_maps_url(url):
-                    google_maps_urls.add(url)
+                clean_url = re.sub(r'[&"\'<>].*?(?=https://|$)', '', url)
+                clean_url = url.split('"')[0].split("'")[0].split('<')[0].split('>')[0]
+                
+                if self.is_valid_maps_url(clean_url):
+                    google_maps_urls.add(clean_url)
             
-            # Also check href attributes of all links
-            st.info("🔗 Checking all links on the page...")
+            # Step 6: Check href attributes of all links
+            with progress_placeholder.container():
+                progress_bar.progress(90)
+                status_placeholder.info("🔗 Checking all clickable links on the page...")
+            
             try:
                 links = self.driver.find_elements(By.TAG_NAME, "a")
-                for link in links:
-                    href = link.get_attribute("href")
-                    if href and self.is_valid_maps_url(href):
-                        google_maps_urls.add(href)
-            except Exception as e:
-                st.warning(f"Error checking links: {e}")
+                status_placeholder.info(f"🔗 Checking {len(links)} links on the page...")
                 
+                for i, link in enumerate(links):
+                    if i % 100 == 0:  # Update every 100 links
+                        status_placeholder.info(f"🔗 Checked {i}/{len(links)} links...")
+                        
+                    try:
+                        href = link.get_attribute("href")
+                        if href and self.is_valid_maps_url(href):
+                            google_maps_urls.add(href)
+                    except:
+                        continue  # Skip broken links
+                        
+            except Exception as e:
+                status_placeholder.warning(f"⚠️ Error checking links: {e}")
+            
+            # Step 7: Complete
+            with progress_placeholder.container():
+                progress_bar.progress(100)
+                if google_maps_urls:
+                    status_placeholder.success(f"✅ Extraction complete! Found {len(google_maps_urls)} Google Maps URLs")
+                else:
+                    status_placeholder.error("❌ No Google Maps URLs found on this page")
+            
             return list(google_maps_urls)
             
         except Exception as e:
-            st.error(f"Error extracting URLs: {str(e)}")
+            with progress_placeholder.container():
+                status_placeholder.error(f"❌ Error during extraction: {str(e)}")
+            st.error(f"Full error details: {str(e)}")
             return []
         finally:
             self.close_driver()
     
     def is_valid_maps_url(self, url):
         """Check if URL is a valid Google Maps place URL"""
-        if not url:
+        if not url or len(url) < 10:
             return False
             
-        # Check for Google Maps patterns
+        # Check for Google Maps patterns (including the format you showed)
         maps_patterns = [
-            r'google\.com/maps/place/',
-            r'maps\.google\.com.*place',
-            r'goo\.gl/maps/',
+            r'google\.com/maps/place/',           # Standard place URLs
+            r'maps\.google\.com.*place',          # Alternative maps URLs
+            r'goo\.gl/maps/',                     # Short URLs
+            r'google\.com/maps/.*data=',          # URLs with data parameters (like your example)
+            r'google\.com/maps/.*@\d+\.\d+',      # URLs with coordinates
         ]
         
         for pattern in maps_patterns:
             if re.search(pattern, url, re.IGNORECASE):
-                return True
+                # Additional validation: must contain coordinates or place identifier
+                if ('/@' in url and re.search(r'@\d+\.\d+', url)) or '/place/' in url or 'data=' in url:
+                    return True
                 
         return False
 
@@ -206,16 +284,60 @@ def main():
             help="Paste any URL - could be Google search results, business directories, or any page with Google Maps links"
         )
         
+        # Quick test URLs
+        st.markdown("**🧪 Quick Test URLs:**")
+        test_urls = [
+            "https://www.google.com/search?tbm=lcl&q=restaurants+in+new+york",
+            "https://www.google.com/search?tbm=lcl&q=dentists+in+chicago", 
+            "https://www.yelp.com/nyc/restaurants"
+        ]
+        
+        cols = st.columns(3)
+        for i, test_url in enumerate(test_urls):
+            with cols[i]:
+                url_name = test_url.split('q=')[1].split('&')[0].replace('+', ' ') if 'q=' in test_url else f"Test {i+1}"
+                if st.button(f"🔗 {url_name[:20]}...", key=f"test_{i}", use_container_width=True):
+                    st.session_state.test_url = test_url
+                    st.rerun()
+        
+        # Use test URL if selected
+        if hasattr(st.session_state, 'test_url'):
+            input_url = st.session_state.test_url
+            st.info(f"🧪 Using test URL: {input_url}")
+            delattr(st.session_state, 'test_url')
+        
         # Buttons
         col1, col2 = st.columns(2)
         
         with col1:
             if st.button("🔍 Extract URLs", use_container_width=True):
                 if input_url:
-                    with st.spinner("Extracting Google Maps URLs... This may take a minute."):
-                        urls = st.session_state.extractor.extract_google_maps_urls(input_url)
-                        st.session_state.extracted_urls = urls
-                        st.rerun()
+                    # Validate URL format
+                    if not input_url.startswith(('http://', 'https://')):
+                        input_url = 'https://' + input_url
+                    
+                    # Clear previous results
+                    st.session_state.extracted_urls = []
+                    
+                    # Show extraction in progress
+                    with st.spinner("🕸️ Starting extraction process..."):
+                        try:
+                            urls = st.session_state.extractor.extract_google_maps_urls(input_url)
+                            st.session_state.extracted_urls = urls
+                            st.session_state.extraction_attempted = True
+                            
+                            # Show final result
+                            if urls:
+                                st.balloons()
+                                st.success(f"🎉 Successfully extracted {len(urls)} Google Maps URLs!")
+                            else:
+                                st.warning("🔍 No Google Maps URLs found. The page may not contain business listings with Maps links.")
+                                
+                        except Exception as e:
+                            st.error(f"❌ Extraction failed: {str(e)}")
+                            st.info("💡 Try checking if the URL is correct and accessible.")
+                            
+                    st.rerun()
                 else:
                     st.error("Please enter a URL first!")
         
